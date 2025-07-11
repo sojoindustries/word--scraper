@@ -12,16 +12,16 @@ from nltk.collocations import BigramCollocationFinder
 from nltk.metrics import BigramAssocMeasures
 from rake_nltk import Rake
 
-# Define domain-specific and general stop words
+#define domain-specific and general stop words
 DOMAIN_STOP = {'line', 'shift', 'run', 'case', 'production', 'machine', 'ran', 'cans', 'cases'}
 STOP_WORDS = set(stopwords.words('english')) | DOMAIN_STOP
 
-# Load and preprocess dataset
+#load and preprocess dataset
 df = pd.read_csv('Data/CB_EOS_Data_Scraper.csv')
 df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
 df['DATE'] = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
 
-# Get list of product lines
+#get list of product lines
 product_lines = sorted(df['BINNUMBER'].dropna().unique())
 
 # Extract top unigrams or bigrams based on count
@@ -39,7 +39,7 @@ def extract_ngrams(texts, ngram_range=(1, 1), top_n=20):
         .sort_values('count', ascending=False) \
         .head(top_n)
 
-# Extract top terms using TF-IDF
+#extract top terms using TF-IDF
 def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
     if len(texts) == 0:
         return pd.DataFrame(columns=['phrase', 'tfidf'])
@@ -60,7 +60,7 @@ def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
         print(f"TF-IDF computation failed: {e}")
         return pd.DataFrame(columns=['phrase', 'tfidf'])
 
-# Identify bigrams with high pointwise mutual information (PMI)
+#identify bigrams with high pointwise mutual information (PMI)
 def extract_pmi_bigrams(texts, top_n=20, freq_filter=5):
     tokens = [t for doc in texts for t in doc.lower().split() if t.isalpha() and t not in STOP_WORDS]
     finder = BigramCollocationFinder.from_words(tokens)
@@ -70,14 +70,14 @@ def extract_pmi_bigrams(texts, top_n=20, freq_filter=5):
     df_bigrams['bigram'] = df_bigrams['bigram'].str.join(' ')
     return df_bigrams.head(top_n)
 
-# Use RAKE to extract key phrases from text
+#use RAKE to extract key phrases from text
 def extract_rake_phrases(texts, top_n=20):
     rake = Rake(stopwords=STOP_WORDS)
     rake.extract_keywords_from_sentences(texts)
     phrases = rake.get_ranked_phrases()[:top_n]
     return pd.DataFrame({'rake_phrase': phrases})
 
-# Perform Latent Dirichlet Allocation (LDA) topic modeling
+#perform Latent Dirichlet Allocation (LDA) topic modeling
 def extract_lda_topics(texts, n_topics=5, n_top_words=5):
     vectorizer = CountVectorizer(stop_words=list(STOP_WORDS))
     X = vectorizer.fit_transform(texts)
@@ -90,7 +90,7 @@ def extract_lda_topics(texts, n_topics=5, n_top_words=5):
         topics.append({'topic': i + 1, 'top_terms': ', '.join(top_terms)})
     return pd.DataFrame(topics)
 
-# Cluster similar documents using K-Means
+#cluster similar documents using K-Means
 def extract_clusters(texts, n_clusters=5):
     vectorizer = TfidfVectorizer(stop_words=list(STOP_WORDS))
     X = vectorizer.fit_transform(texts)
@@ -103,7 +103,7 @@ def extract_clusters(texts, n_clusters=5):
     label_counts = pd.DataFrame({'cluster': np.unique(labels), 'count': np.unique(labels, return_counts=True)[1]})
     return label_counts
 
-# Compute NLP metrics for each product line
+#compute NLP metrics for each product line
 line_metrics = {}
 for product_line in product_lines:
     filtered_df = df[df['BINNUMBER'] == product_line]['CUSTRECORD_EOS_MEMO']
@@ -118,7 +118,7 @@ for product_line in product_lines:
         'clusters': extract_clusters(filtered_df)
     }
 
-# Initialize Dash app
+#initialize Dash app
 app = dash.Dash(__name__)
 app.layout = html.Div([
     html.Div([
@@ -149,7 +149,7 @@ app.layout = html.Div([
 def update_dashboard(selected_line):
     metrics = line_metrics[selected_line]
 
-    # Helper to build a simple Plotly table
+    #helper to build a simple Plotly table
     def create_table(df, title):
         return go.Figure(data=[go.Table(
             header=dict(values=list(df.columns), fill_color='lightgrey'),
@@ -165,7 +165,7 @@ def update_dashboard(selected_line):
     fig_ld = create_table(metrics['lda_topics'], f"{selected_line} — LDA Topics")
     fig_cl = create_table(metrics['clusters'], f"{selected_line} — Cluster Sizes")
 
-    # Plot keyword trends over time
+    #plot keyword trends over time
     sub_df = df[df['BINNUMBER'] == selected_line]
     downtime = sub_df['CUSTRECORD_EOS_MEMO'].str.contains('downtime', case=False) \
         .groupby(sub_df['DATE'].dt.date).sum().reset_index(name='downtime')
