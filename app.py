@@ -354,8 +354,8 @@ app.layout = html.Div([
     html.Div([
         html.H3('Text Analysis Results'),
         *[dcc.Loading(
-            dcc.Graph(id=graph_id, config={'clickmode': 'event+select'}),
-            type='circle'
+    dcc.Graph(id=graph_id),
+    type='circle'
         ) for graph_id in [
             'bigram_summary', 'tfidf_bigrams', 'lda_topics', 'cluster_summary',
             'downtime_jams_chart', 'timeseries_chart', 'sentiment_chart', 'weekday_chart',
