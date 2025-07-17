@@ -8,13 +8,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import dash
 from dash import dcc, html, Input, Output, callback_context
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
 from nltk.corpus import stopwords
-from nltk.collocations import BigramCollocationFinder
 from nltk.metrics import BigramAssocMeasures
-from rake_nltk import Rake
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import base64
@@ -24,6 +21,11 @@ import re
 from datetime import datetime, timedelta
 from typing import Iterable
 from scipy import stats
+from sklearn.feature_extraction.text import TfidfVectorizer
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from sklearn.feature_extraction.text import CountVectorizer
+
+
 
 # ------------------------
 #define stopword sets
@@ -96,29 +98,6 @@ def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
         return pd.DataFrame(columns=['phrase', 'tfidf'])
 
 
-def extract_pmi_bigrams(texts, top_n=20, freq_filter=5):
-
-    #extract tokens that are alphabetic and not in stopwords
-    tokens = [t for doc in texts for t in doc.lower().split()
-              if t.isalpha() and t not in STOP_WORDS]
-
-    finder = BigramCollocationFinder.from_words(tokens)
-    finder.apply_freq_filter(freq_filter)  # Ignore rare bigrams
-    scored = finder.score_ngrams(BigramAssocMeasures.pmi)
-
-    df_bigrams = pd.DataFrame(scored, columns=['bigram', 'pmi'])
-    df_bigrams['bigram'] = df_bigrams['bigram'].str.join(' ')  # Join tuple words with space
-    return df_bigrams.head(top_n)
-
-
-def extract_rake_phrases(texts, top_n=20):
-
-    rake = Rake(stopwords=STOP_WORDS)
-    rake.extract_keywords_from_sentences(texts)
-    phrases = rake.get_ranked_phrases()[:top_n]
-    return pd.DataFrame({'rake_phrase': phrases})
-
-
 def extract_lda_topics(texts, n_topics=5, n_top_words=5):
 
     vectorizer = CountVectorizer(stop_words=list(STOP_WORDS))
@@ -173,69 +152,30 @@ def extract_clusters(texts: Iterable[str], n_clusters: int = 5) -> pd.DataFrame:
 
 
 def create_wordcloud(texts):
-
     if not isinstance(texts, (pd.Series, list)) or len(texts) == 0 or not any(texts):
         return px.scatter(title="No data available for wordcloud")
 
-    try:
-        #combine all texts into a single string
-        text = ' '.join([str(t) for t in texts if isinstance(t, str) and t])
+    # Combine all texts into a single string
+    text = ' '.join([str(t) for t in texts if isinstance(t, str) and t]).strip()
+    if not text:
+        return px.scatter(title="No valid text available for wordcloud")
 
-        if not text.strip():
-            return px.scatter(title="No valid text available for wordcloud")
+    # Generate word cloud
+    wc = WordCloud(
+        width=800,
+        height=400,
+        background_color='white',
+        stopwords=STOP_WORDS,
+        max_words=100,
+        collocations=True
+    ).generate(text)
 
-        #generate wordcloud
-        wc = WordCloud(
-            width=800,
-            height=400,
-            background_color='white',
-            stopwords=STOP_WORDS,
-            max_words=100,
-            collocations=True
-        ).generate(text)
-
-        #convert matplotlib figure to plotly
-        fig = plt.figure(figsize=(10, 7))
-        plt.imshow(wc, interpolation='bilinear')
-        plt.axis('off')
-
-        #convert to image bytes
-        img_data = BytesIO()
-        plt.savefig(img_data, format='png', bbox_inches='tight', pad_inches=0)
-        img_data.seek(0)
-
-        #create plotly figure from image
-        img_str = base64.b64encode(img_data.read()).decode()
-
-        #create a plotly figure with the image
-        fig = go.Figure()
-        fig.add_layout_image(
-            dict(
-                source=f'data:image/png;base64,{img_str}',
-                x=0,
-                y=0,
-                xref="paper",
-                yref="paper",
-                sizex=1,
-                sizey=1,
-                sizing="stretch",
-                layer="below"
-            )
-        )
-        fig.update_layout(
-            title="Word Cloud Visualization",
-            autosize=True,
-            height=500,
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
-        )
-
-        return fig
-
-    except Exception as e:
-        print(f"Wordcloud generation failed: {e}")
-        return px.scatter(title=f"Wordcloud generation failed: {str(e)}")
-
+    # Render with Plotly
+    img    = wc.to_array()
+    fig_wc = px.imshow(img, title="Word Cloud Visualization")
+    fig_wc.update_xaxes(visible=False)
+    fig_wc.update_yaxes(visible=False)
+    return fig_wc
 
 def generate_pca_scatter(texts):
 
@@ -309,12 +249,8 @@ line_metrics = {}
 for product_line in product_lines:
     texts = df[df['BINNUMBER'] == product_line]['CUSTRECORD_EOS_MEMO']
     line_metrics[product_line] = {
-        'unigrams': extract_ngrams(texts),
         'bigrams': extract_ngrams(texts, (2, 2)),
-        'tfidf_unigrams': extract_tfidf_terms(texts),
         'tfidf_bigrams': extract_tfidf_terms(texts, (2, 2)),
-        'pmi_bigrams': extract_pmi_bigrams(texts),
-        'rake_phrases': extract_rake_phrases(texts),
         'lda_topics': extract_lda_topics(texts),
         'clusters': extract_clusters(texts),
         'sentiment': extract_sentiment_keywords(texts, POSITIVE_TERMS, NEGATIVE_TERMS)
@@ -323,8 +259,28 @@ for product_line in product_lines:
 # ------------------------
 #build Dash app layout
 # ------------------------
-app = dash.Dash(__name__)
+app = dash.Dash(
+    __name__,
+    suppress_callback_exceptions=True  # ← you can keep this if you need it
+)
+
+# Configure dev tools after initialization
+app.enable_dev_tools()
+
+
 app.layout = html.Div([
+    # — KPI Row
+    html.Div(
+        id='kpi-row',
+        style={
+            'display': 'flex',
+            'justifyContent': 'space-around',
+            'padding': '10px',
+            'backgroundColor': '#f9f9f9'
+        }
+    ),
+
+    # Sidebar controls
     html.Div([
         html.H2('End of Shift Reporting Dashboard'),
         html.Label('Select Product Line:'),
@@ -340,37 +296,53 @@ app.layout = html.Div([
         )
     ], style={'width': '20%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '20px'}),
 
+    # Chart area
     html.Div([
         html.H3('Text Analysis Results'),
-        *[dcc.Loading(dcc.Graph(id=graph_id), type='circle') for graph_id in [
-            'unigram_summary', 'bigram_summary', 'tfidf_unigrams', 'tfidf_bigrams',
-            'pmi_bigrams', 'rake_phrases', 'lda_topics', 'cluster_summary',
-            'downtime_jams_chart', 'timeseries_chart', 'sentiment_chart',
-            'weekday_chart', 'wordcloud_chart', 'pca_scatter', 'downtime_issues_overtime'
+        *[dcc.Loading(
+            dcc.Graph(id=graph_id, config={'clickmode': 'event+select'}),
+            type='circle'
+        ) for graph_id in [
+            'bigram_summary', 'tfidf_bigrams', 'lda_topics', 'cluster_summary',
+            'downtime_jams_chart', 'timeseries_chart', 'sentiment_chart', 'weekday_chart',
+            'wordcloud_chart', 'pca_scatter', 'downtime-pie-chart', 'sentiment-dist-chart',
+            'sentiment-trend-chart', 'extremes-chart', 'monthly-volume-chart'
         ]]
+
     ], style={'width': '75%', 'display': 'inline-block', 'padding': '20px'})
 ])
+
+def sentiment_distribution(texts):
+    analyzer = SentimentIntensityAnalyzer()
+    scores   = [analyzer.polarity_scores(t)['compound'] for t in texts]
+    return pd.DataFrame({'score': scores})
 
 
 # ------------------------
 #callback to update all figures
 # ------------------------
-@app.callback(
-    [Output(graph_id, 'figure') for graph_id in [
-        'unigram_summary', 'bigram_summary', 'tfidf_unigrams', 'tfidf_bigrams',
-        'pmi_bigrams', 'rake_phrases', 'lda_topics', 'cluster_summary',
-        'downtime_jams_chart', 'timeseries_chart', 'sentiment_chart',
-        'weekday_chart', 'wordcloud_chart', 'pca_scatter', 'downtime_issues_overtime'
-    ]],
-    [Input('line-filter', 'value'),
-     Input('date-range', 'start_date'),
-     Input('date-range', 'end_date')]
-)
-def update_dashboard(selected_line, start_date, end_date):
-    #get pre-computed metrics for the selected line
-    m = line_metrics[selected_line]
+    @app.callback(
+        Output('kpi-row', 'children'),
+        Output('bigram_summary', 'figure'),
+        Output('tfidf_bigrams', 'figure'),
+        Output('lda_topics', 'figure'),
+        Output('cluster_summary', 'figure'),
+        Output('downtime-pie-chart', 'figure'),
+        Output('timeseries_chart', 'figure'),
+        Output('sentiment_chart', 'figure'),
+        Output('weekday_chart', 'figure'),
+        Output('wordcloud_chart', 'figure'),
+        Output('pca_scatter', 'figure'),
+        Output('sentiment-dist-chart', 'figure'),
+        Output('sentiment-trend-chart', 'figure'),
+        Output('extremes-chart', 'figure'),
+        Output('monthly-volume-chart', 'figure')
+    )
+    def update_dashboard(selected_line, start_date, end_date):
+        m = line_metrics[selected_line]
 
-    #filter dataframe by selected line and date range
+        # filter dataframe by selected line and date range
+
     line_df = df[df['BINNUMBER'] == selected_line]
     if start_date and end_date:
         line_df = line_df[(line_df['DATE'] >= start_date) & (line_df['DATE'] <= end_date)]
@@ -382,13 +354,29 @@ def update_dashboard(selected_line, start_date, end_date):
             cells=dict(values=[df[col] for col in df.columns], align='left')
         )]).update_layout(title=title, height=400)
 
+    # KPIs (insert this block right before your time‐based chart)
+    total_memos    = len(line_df)
+    avg_sent       = line_df['SENT_SCORE'].mean()
+    downtime_memos = line_df['CUSTRECORD_EOS_MEMO'] \
+        .str.contains('down|jam|stuck|break|stopped|failure|error', case=False).sum()
+    kpis = [
+        html.Div([html.H4('Total Memos'),    html.P(total_memos)]),
+        html.Div([html.H4('Avg Sentiment'),  html.P(f"{avg_sent:.2f}")]),
+        html.Div([html.H4('Downtime Memos'), html.P(downtime_memos)])
+    ]
+
+    def top_extremes(df_line):
+        analyzer = SentimentIntensityAnalyzer()
+        df_line = df_line.copy()
+        df_line['score'] = df_line['CUSTRECORD_EOS_MEMO'] \
+            .apply(lambda t: analyzer.polarity_scores(t)['compound'])
+        top_pos = df_line.nlargest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
+        top_neg = df_line.nsmallest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
+        return top_pos, top_neg
+
     #create basic table figures
-    fig_ug = create_table(m['unigrams'], f"{selected_line} — Top Unigrams")
     fig_bg = create_table(m['bigrams'], f"{selected_line} — Top Bigrams")
-    fig_tu = create_table(m['tfidf_unigrams'], f"{selected_line} — Top TF-IDF Unigrams")
     fig_tb = create_table(m['tfidf_bigrams'], f"{selected_line} — Top TF-IDF Bigrams")
-    fig_pm = create_table(m['pmi_bigrams'], f"{selected_line} — Top PMI Bigrams")
-    fig_rk = create_table(m['rake_phrases'], f"{selected_line} — Top RAKE Phrases")
     fig_ld = create_table(m['lda_topics'], f"{selected_line} — LDA Topics")
     fig_cl = create_table(m['clusters'], f"{selected_line} — Cluster Sizes")
 
@@ -459,6 +447,74 @@ def update_dashboard(selected_line, start_date, end_date):
     #create wordcloud
     fig_wc = create_wordcloud(line_df['CUSTRECORD_EOS_MEMO'])
 
+    # Sentiment Distribution
+    dist_df = sentiment_distribution(line_df['CUSTRECORD_EOS_MEMO'])
+    fig_dist = px.histogram(
+        dist_df,
+        x='score',
+        nbins=20,
+        title='Sentiment Score Distribution',
+        labels={'score': 'VADER Compound Score'}
+    )
+    # Monthly Avg Sentiment Trend
+    trend_df = (
+        line_df.set_index('DATE')['SENT_SCORE']
+        .resample('M').mean()
+        .reset_index(name='avg_score')
+    )
+    fig_trend = px.line(
+        trend_df, x='DATE', y='avg_score', markers=True,
+        title='Monthly Avg Sentiment',
+        labels={'avg_score': 'Avg VADER Score'}
+    )
+    # Top 5 Positive & Negative Memos
+    top_pos, top_neg = top_extremes(line_df)
+    fig_ex = go.Figure()
+    fig_ex.add_trace(go.Scatter(
+        x=top_pos['DATE'], y=top_pos['score'],
+        mode='markers+text', name='Top Positive',
+        text=top_pos['CUSTRECORD_EOS_MEMO'],
+        textposition='top center', marker_color='green'
+    ))
+    fig_ex.add_trace(go.Scatter(
+        x=top_neg['DATE'], y=top_neg['score'],
+        mode='markers+text', name='Top Negative',
+        text=top_neg['CUSTRECORD_EOS_MEMO'],
+        textposition='bottom center', marker_color='red'
+    ))
+    fig_ex.update_layout(title='Top 5 Positive & Negative Memos')
+    # Monthly Memo Volume
+    vol_df = (
+        line_df.set_index('DATE')
+        .resample('M').size()
+        .reset_index(name='count')
+    )
+    fig_vol = px.line(
+        vol_df, x='DATE', y='count', markers=True,
+        title='Monthly Memo Volume',
+        labels={'count': 'Number of Memos'}
+    )
+
+    # Monthly Memo Volume (Step 11.2)
+    vol_df = (
+        line_df.set_index('DATE')
+        .resample('M').size()
+        .reset_index(name='count')
+    )
+    fig_vol = px.line(
+        vol_df, x='DATE', y='count', markers=True,
+        title='Monthly Memo Volume', labels={'count': 'Number of Memos'}
+    )
+
+    return [
+        kpis,
+        fig_bg, fig_tb, fig_ld, fig_cl,
+        fig_pie, fig_ts, fig_sent, fig_wd,
+        fig_wc, fig_pca, fig_dist, fig_trend,
+        fig_ex,  # ← make sure fig_ex is returned here
+        fig_vol
+    ]
+
     #create PCA scatter plot
     fig_pca = generate_pca_scatter(line_df['CUSTRECORD_EOS_MEMO'])
 
@@ -468,54 +524,18 @@ def update_dashboard(selected_line, start_date, end_date):
     downtime_count = line_df['is_downtime'].sum()
     total_count = len(line_df)
 
-    fig_dj = px.pie(
-        values=[downtime_count, total_count - downtime_count],
-        names=['Downtime/Issue Mentions', 'Other'],
-        title=f"{selected_line} — Downtime/Issue Mentions ({downtime_count}/{total_count} reports)",
+    fig_pie = px.pie(
+        values=[downtime_memos, other],
+        names=['Downtime', 'Other'],
+        hole=0.4,
+        title='Downtime vs Other Memos',
         color_discrete_sequence=['red', 'lightblue']
     )
+    fig_pie.update_traces(textinfo='percent+value', textposition='inside')
 
-    #create line graph of downtime/issues compared to other metrics over time
-    #first, aggregate by week
-    line_df['week'] = line_df['DATE'].dt.isocalendar().week
-    line_df['year'] = line_df['DATE'].dt.year
-    line_df['yearweek'] = line_df['year'].astype(str) + '-' + line_df['week'].astype(str)
-
-    #count downtime issues and other reports per week
-    weekly_issues = line_df.groupby(['yearweek', 'DATE']).agg(
-        downtime_issues=('is_downtime', 'sum'),
-        other_reports=('is_downtime', lambda x: (~x).sum()),
-        total_reports=('is_downtime', 'count')
-    ).reset_index()
-
-    #sort by date for the line chart
-    weekly_issues = weekly_issues.sort_values('DATE')
-
-    #create the time series chart comparing downtime to other issues
-    fig_downtime_time = px.line(
-        weekly_issues,
-        x='DATE',
-        y=['downtime_issues', 'other_reports'],
-        title=f"{selected_line} — Downtime Issues vs Other Reports Over Time",
-        labels={
-            'DATE': 'Week',
-            'value': 'Number of Reports',
-            'variable': 'Report Type'
-        },
-        color_discrete_map={
-            'downtime_issues': 'red',
-            'other_reports': 'blue'
-        }
-    )
-
-    fig_downtime_time.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Number of Reports",
-        legend_title="Report Type"
-    )
-
-    return [fig_ug, fig_bg, fig_tu, fig_tb, fig_pm, fig_rk, fig_ld, fig_cl,
-            fig_dj, fig_ts, fig_sent, fig_wd, fig_wc, fig_pca, fig_downtime_time]
+    return [kpis, fig_bg, fig_tb, fig_ld,  fig_cl,  fig_pie,
+            fig_ts,  fig_sent,  fig_wd,   fig_wc,   fig_pca,
+            fig_dist,  fig_trend, fig_ex, fig_vol]
 
 
 if __name__ == '__main__':
