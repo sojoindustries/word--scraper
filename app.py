@@ -1,8 +1,8 @@
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -10,60 +10,145 @@ import dash
 from dash import dcc, html, Input, Output, callback_context
 from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
-from nltk.corpus import stopwords
+import os
+import nltk
+
+nltk_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nltk_data')
+os.makedirs(nltk_data_path, exist_ok=True)
+nltk.data.path.append(nltk_data_path)
+
+
+def ensure_nltk_resource(resource_name):
+    if resource_name == 'vader_lexicon':
+        resource_path = f"sentiment/{resource_name}"
+    else:
+        resource_path = f"corpora/{resource_name}"
+
+    try:
+        nltk.data.find(resource_path)
+        print(f"NLTK resource already available: {resource_name}")
+        return True
+    except LookupError:
+        print(f"NLTK resource not found: {resource_name}. Attempting to download...")
+        try:
+            download_result = nltk.download(resource_name, download_dir=nltk_data_path, quiet=False)
+            if download_result:
+                print(f"Successfully downloaded NLTK resource: {resource_name}")
+                return True
+            else:
+                print(f"Warning: Failed to download NLTK resource: {resource_name}")
+                return False
+        except Exception as e:
+            print(f"Error downloading NLTK resource {resource_name}: {str(e)}")
+            return False
+
+
+print(f"Checking NLTK resources in {nltk_data_path}")
+required_resources = ['vader_lexicon', 'stopwords', 'punkt']
+missing_resources = []
+
+for resource in required_resources:
+    if not ensure_nltk_resource(resource):
+        missing_resources.append(resource)
+        print(f"Warning: Could not access resource {resource}, will use fallbacks if needed")
+
+if 'vader_lexicon' not in missing_resources:
+    from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+    sentiment_analyzer = SentimentIntensityAnalyzer()
+else:
+    class SimpleSentimentAnalyzer:
+        def polarity_scores(self, text):
+            positive_words = ['good', 'great', 'excellent', 'perfect', 'resolved', 'fixed', 'improved', 'success']
+            negative_words = ['issue', 'problem', 'error', 'fail', 'down', 'jam', 'stuck', 'break', 'stopped']
+
+            text = text.lower()
+            pos_count = sum(1 for word in positive_words if word in text)
+            neg_count = sum(1 for word in negative_words if word in text)
+
+            total = pos_count + neg_count
+            if total == 0:
+                compound = 0
+            else:
+                compound = (pos_count - neg_count) / total
+
+            return {'compound': compound, 'pos': pos_count, 'neg': neg_count, 'neu': 1}
+
+
+    sentiment_analyzer = SimpleSentimentAnalyzer()
+    print("Using simple fallback sentiment analyzer")
+
+if 'stopwords' not in missing_resources:
+    from nltk.corpus import stopwords
+
+    nltk_stopwords = set(stopwords.words('english'))
+else:
+    nltk_stopwords = {
+        'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your',
+        'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she',
+        'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their',
+        'theirs', 'themselves', 'what', 'which', 'who', 'whom', 'this', 'that',
+        'these', 'those', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+        'have', 'has', 'had', 'having', 'do', 'does', 'did', 'doing', 'a', 'an',
+        'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of',
+        'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through',
+        'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down',
+        'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'then',
+        'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any',
+        'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+        'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's',
+        't', 'can', 'will', 'just', 'don', 'should', 'now'
+    }
+    print("Using fallback stopwords list")
+
+if 'punkt' not in missing_resources:
+    from nltk.tokenize import word_tokenize
+
+    tokenize_function = word_tokenize
+else:
+    def tokenize_function(text):
+        return text.lower().split()
+
+
+    print("Using simple fallback tokenizer")
+
 from nltk.metrics import BigramAssocMeasures
 from wordcloud import WordCloud
-import matplotlib.pyplot as plt
 import base64
 from io import BytesIO
-import os
 import re
 from datetime import datetime, timedelta
 from typing import Iterable
 from scipy import stats
-from sklearn.feature_extraction.text import TfidfVectorizer
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 
-
-
-# ------------------------
-#define stopword sets
-# ------------------------
-#these common domain terms appear frequently and seem helpful
 DOMAIN_STOP = {
     'line', 'shift', 'run', 'case', 'production', 'machine', 'ran',
     'cans', 'cases', 'product', 'products', 'packaging', 'package'
 }
-#combine our domain specific list with NLTK's english stopwords
-STOP_WORDS = set(stopwords.words('english')) | DOMAIN_STOP
+STOP_WORDS = nltk_stopwords | DOMAIN_STOP
 
-# ------------------------
-#load and preprocess data
-# ------------------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = "/Users/cole/PycharmProjects/EOSDashboard/Data/CB_EOS_Data_Scraper.csv"
 df = pd.read_csv(file_path)
 
-#clean and transform data
-df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')  # remove NaNs
-df['DATE'] = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])  # Convert dates to datetime objects
-df['MONTH'] = df['DATE'].dt.strftime('%Y-%m')  # Extract month for time-based analysis
-df['YEAR'] = df['DATE'].dt.year  # Extract year for time-based analysis
-df['WEEKDAY'] = df['DATE'].dt.day_name()  # Extract day name for day-of-week analysis
+df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
+df['DATE'] = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
+df['MONTH'] = df['DATE'].dt.strftime('%Y-%m')
+df['YEAR'] = df['DATE'].dt.year
+df['WEEKDAY'] = df['DATE'].dt.day_name()
 
-#extract unique product lines for dropdown filter
+df['SENT_SCORE'] = df['CUSTRECORD_EOS_MEMO'].apply(
+    lambda x: sentiment_analyzer.polarity_scores(str(x))['compound'] if isinstance(x, str) else 0
+)
+
 product_lines = sorted(df['BINNUMBER'].dropna().unique())
 
 
-# ------------------------
-#text analysis functions
-# ------------------------
 def extract_ngrams(texts, ngram_range=(1, 1), top_n=20):
-
     vectorizer = CountVectorizer(
         lowercase=True,
-        token_pattern=r'\b[a-zA-Z]+\b',  # Only consider alphabetic words
+        token_pattern=r'\b[a-zA-Z]+\b',
         stop_words=list(STOP_WORDS),
         ngram_range=ngram_range
     )
@@ -76,7 +161,6 @@ def extract_ngrams(texts, ngram_range=(1, 1), top_n=20):
 
 
 def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
-
     if len(texts) == 0:
         return pd.DataFrame(columns=['phrase', 'tfidf'])
 
@@ -99,11 +183,9 @@ def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
 
 
 def extract_lda_topics(texts, n_topics=5, n_top_words=5):
-
     vectorizer = CountVectorizer(stop_words=list(STOP_WORDS))
     X = vectorizer.fit_transform(texts)
 
-    #train LDA model
     lda = LatentDirichletAllocation(
         n_components=n_topics,
         random_state=0,
@@ -111,11 +193,9 @@ def extract_lda_topics(texts, n_topics=5, n_top_words=5):
     )
     lda.fit(X)
 
-    #extract topics
     terms = vectorizer.get_feature_names_out()
     topics = []
     for i, comp in enumerate(lda.components_):
-        # Get indices of top words for this topic, sorted by importance
         top_word_indices = comp.argsort()[:-n_top_words - 1:-1]
         top_terms = [terms[idx] for idx in top_word_indices]
         topics.append({
@@ -127,23 +207,19 @@ def extract_lda_topics(texts, n_topics=5, n_top_words=5):
 
 
 def extract_clusters(texts: Iterable[str], n_clusters: int = 5) -> pd.DataFrame:
-
     vectorizer = TfidfVectorizer(stop_words=list(STOP_WORDS))
     X = vectorizer.fit_transform(texts)
 
-    #adjust number of clusters if necessary
     if X.shape[0] < n_clusters:
         if X.shape[0] == 0:
             return pd.DataFrame(columns=['cluster', 'count'])
         n_clusters = max(2, X.shape[0])
 
-    #perform clustering
     n_samples = X.shape[0]
-    n_clusters = min(n_samples, n_clusters)  # Ensure n_clusters is not greater than n_samples
+    n_clusters = min(n_samples, n_clusters)
     model = KMeans(n_clusters=n_clusters, random_state=0, n_init=10)
     labels = model.fit_predict(X)
 
-    #count documents in each cluster
     counts = np.unique(labels, return_counts=True)[1]
     return pd.DataFrame({
         'cluster': np.unique(labels),
@@ -155,12 +231,10 @@ def create_wordcloud(texts):
     if not isinstance(texts, (pd.Series, list)) or len(texts) == 0 or not any(texts):
         return px.scatter(title="No data available for wordcloud")
 
-    # Combine all texts into a single string
     text = ' '.join([str(t) for t in texts if isinstance(t, str) and t]).strip()
     if not text:
         return px.scatter(title="No valid text available for wordcloud")
 
-    # Generate word cloud
     wc = WordCloud(
         width=800,
         height=400,
@@ -170,31 +244,26 @@ def create_wordcloud(texts):
         collocations=True
     ).generate(text)
 
-    # Render with Plotly
-    img    = wc.to_array()
+    img = wc.to_array()
     fig_wc = px.imshow(img, title="Word Cloud Visualization")
     fig_wc.update_xaxes(visible=False)
     fig_wc.update_yaxes(visible=False)
     return fig_wc
 
-def generate_pca_scatter(texts):
 
+def generate_pca_scatter(texts):
     if len(texts) < 3:
         return px.scatter(title="Not enough data for PCA visualization")
 
     vectorizer = TfidfVectorizer(stop_words=list(STOP_WORDS))
     try:
-        #convert texts to TF-IDF vectors
         X = vectorizer.fit_transform(texts)
 
-        #apply PCA to reduce to 2 dimensions
         pca = PCA(n_components=2)
         components = pca.fit_transform(X.toarray())
 
-        #calculate variance explained by each component
         var_explained = pca.explained_variance_ratio_
 
-        #create scatter plot
         fig = px.scatter(
             x=components[:, 0],
             y=components[:, 1],
@@ -211,19 +280,16 @@ def generate_pca_scatter(texts):
 
 
 def extract_sentiment_keywords(texts, positive_terms, negative_terms):
-
     pos_counts = {}
     neg_counts = {}
 
     for text in texts:
         if not isinstance(text, str): continue
 
-        #count positive term occurrences
         for term in positive_terms:
             if re.search(r'\b' + term + r'\b', text, re.IGNORECASE):
                 pos_counts[term] = pos_counts.get(term, 0) + 1
 
-        #count negative term occurrences
         for term in negative_terms:
             if re.search(r'\b' + term + r'\b', text, re.IGNORECASE):
                 neg_counts[term] = neg_counts.get(term, 0) + 1
@@ -238,13 +304,9 @@ def extract_sentiment_keywords(texts, positive_terms, negative_terms):
     }
 
 
-#define sentiment terms
 POSITIVE_TERMS = ['good', 'great', 'excellent', 'perfect', 'resolved', 'fixed', 'improved', 'success']
 NEGATIVE_TERMS = ['issue', 'problem', 'error', 'fail', 'down', 'jam', 'stuck', 'break', 'stopped']
 
-# ------------------------
-#pre-calculate metrics per product line
-# ------------------------
 line_metrics = {}
 for product_line in product_lines:
     texts = df[df['BINNUMBER'] == product_line]['CUSTRECORD_EOS_MEMO']
@@ -256,20 +318,14 @@ for product_line in product_lines:
         'sentiment': extract_sentiment_keywords(texts, POSITIVE_TERMS, NEGATIVE_TERMS)
     }
 
-# ------------------------
-#build Dash app layout
-# ------------------------
 app = dash.Dash(
     __name__,
-    suppress_callback_exceptions=True  # ← you can keep this if you need it
+    suppress_callback_exceptions=True
 )
 
-# Configure dev tools after initialization
 app.enable_dev_tools()
 
-
 app.layout = html.Div([
-    # — KPI Row
     html.Div(
         id='kpi-row',
         style={
@@ -280,7 +336,6 @@ app.layout = html.Div([
         }
     ),
 
-    # Sidebar controls
     html.Div([
         html.H2('End of Shift Reporting Dashboard'),
         html.Label('Select Product Line:'),
@@ -296,7 +351,6 @@ app.layout = html.Div([
         )
     ], style={'width': '20%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '20px'}),
 
-    # Chart area
     html.Div([
         html.H3('Text Analysis Results'),
         *[dcc.Loading(
@@ -312,75 +366,68 @@ app.layout = html.Div([
     ], style={'width': '75%', 'display': 'inline-block', 'padding': '20px'})
 ])
 
+
 def sentiment_distribution(texts):
-    analyzer = SentimentIntensityAnalyzer()
-    scores   = [analyzer.polarity_scores(t)['compound'] for t in texts]
+    scores = [sentiment_analyzer.polarity_scores(t)['compound'] for t in texts]
     return pd.DataFrame({'score': scores})
 
 
-# ------------------------
-#callback to update all figures
-# ------------------------
-    @app.callback(
-        Output('kpi-row', 'children'),
-        Output('bigram_summary', 'figure'),
-        Output('tfidf_bigrams', 'figure'),
-        Output('lda_topics', 'figure'),
-        Output('cluster_summary', 'figure'),
-        Output('downtime-pie-chart', 'figure'),
-        Output('timeseries_chart', 'figure'),
-        Output('sentiment_chart', 'figure'),
-        Output('weekday_chart', 'figure'),
-        Output('wordcloud_chart', 'figure'),
-        Output('pca_scatter', 'figure'),
-        Output('sentiment-dist-chart', 'figure'),
-        Output('sentiment-trend-chart', 'figure'),
-        Output('extremes-chart', 'figure'),
-        Output('monthly-volume-chart', 'figure')
-    )
-    def update_dashboard(selected_line, start_date, end_date):
-        m = line_metrics[selected_line]
-
-        # filter dataframe by selected line and date range
+@app.callback(
+    Output('kpi-row', 'children'),
+    Output('bigram_summary', 'figure'),
+    Output('tfidf_bigrams', 'figure'),
+    Output('lda_topics', 'figure'),
+    Output('cluster_summary', 'figure'),
+    Output('downtime-pie-chart', 'figure'),
+    Output('timeseries_chart', 'figure'),
+    Output('sentiment_chart', 'figure'),
+    Output('weekday_chart', 'figure'),
+    Output('wordcloud_chart', 'figure'),
+    Output('pca_scatter', 'figure'),
+    Output('sentiment-dist-chart', 'figure'),
+    Output('sentiment-trend-chart', 'figure'),
+    Output('extremes-chart', 'figure'),
+    Output('monthly-volume-chart', 'figure'),
+    Input('line-filter', 'value'),
+    Input('date-range', 'start_date'),
+    Input('date-range', 'end_date')
+)
+def update_dashboard(selected_line, start_date, end_date):
+    m = line_metrics[selected_line]
 
     line_df = df[df['BINNUMBER'] == selected_line]
     if start_date and end_date:
         line_df = line_df[(line_df['DATE'] >= start_date) & (line_df['DATE'] <= end_date)]
 
-    #helper to build a table figure
     def create_table(df, title):
         return go.Figure(data=[go.Table(
             header=dict(values=list(df.columns), fill_color='lightgrey', align='left'),
             cells=dict(values=[df[col] for col in df.columns], align='left')
         )]).update_layout(title=title, height=400)
 
-    # KPIs (insert this block right before your time‐based chart)
-    total_memos    = len(line_df)
-    avg_sent       = line_df['SENT_SCORE'].mean()
+    total_memos = len(line_df)
+    avg_sent = line_df['SENT_SCORE'].mean()
     downtime_memos = line_df['CUSTRECORD_EOS_MEMO'] \
         .str.contains('down|jam|stuck|break|stopped|failure|error', case=False).sum()
     kpis = [
-        html.Div([html.H4('Total Memos'),    html.P(total_memos)]),
-        html.Div([html.H4('Avg Sentiment'),  html.P(f"{avg_sent:.2f}")]),
+        html.Div([html.H4('Total Memos'), html.P(total_memos)]),
+        html.Div([html.H4('Avg Sentiment'), html.P(f"{avg_sent:.2f}")]),
         html.Div([html.H4('Downtime Memos'), html.P(downtime_memos)])
     ]
 
     def top_extremes(df_line):
-        analyzer = SentimentIntensityAnalyzer()
         df_line = df_line.copy()
         df_line['score'] = df_line['CUSTRECORD_EOS_MEMO'] \
-            .apply(lambda t: analyzer.polarity_scores(t)['compound'])
+            .apply(lambda t: sentiment_analyzer.polarity_scores(t)['compound'])
         top_pos = df_line.nlargest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
         top_neg = df_line.nsmallest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
         return top_pos, top_neg
 
-    #create basic table figures
     fig_bg = create_table(m['bigrams'], f"{selected_line} — Top Bigrams")
     fig_tb = create_table(m['tfidf_bigrams'], f"{selected_line} — Top TF-IDF Bigrams")
     fig_ld = create_table(m['lda_topics'], f"{selected_line} — LDA Topics")
     fig_cl = create_table(m['clusters'], f"{selected_line} — Cluster Sizes")
 
-    #create time-based chart (weekly trends)
     time_df = line_df.groupby(pd.Grouper(key='DATE', freq='W')).size().reset_index(name='count')
     fig_ts = px.line(
         time_df,
@@ -390,21 +437,17 @@ def sentiment_distribution(texts):
         labels={'DATE': 'Week', 'count': 'Number of Comments'}
     )
 
-    #create day-of-week analysis with error bars
     weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     weekday_df = line_df.groupby(['WEEKDAY', line_df['DATE'].dt.isocalendar().week]).size().reset_index(name='count')
 
-    #calculate mean and standard error for each day
     weekday_stats = weekday_df.groupby('WEEKDAY').agg(
         mean_count=('count', 'mean'),
         std_err=('count', lambda x: stats.sem(x, nan_policy='omit') if len(x) > 1 else 0)
     ).reset_index()
 
-    #order days correctly
     weekday_stats['WEEKDAY'] = pd.Categorical(weekday_stats['WEEKDAY'], categories=weekday_order)
     weekday_stats = weekday_stats.sort_values('WEEKDAY')
 
-    #create bar chart with error bars
     fig_wd = px.bar(
         weekday_stats,
         x='WEEKDAY',
@@ -414,11 +457,9 @@ def sentiment_distribution(texts):
         labels={'WEEKDAY': 'Day', 'mean_count': 'Average Number of Comments'}
     )
 
-    #create sentiment analysis chart
     pos_df = m['sentiment']['positive'].head(10)
     neg_df = m['sentiment']['negative'].head(10)
 
-    #combine positive and negative terms
     sentiment_df = pd.DataFrame({
         'Term': list(pos_df['term']) + list(neg_df['term']),
         'Count': list(pos_df['count']) + list(neg_df['count']),
@@ -434,20 +475,8 @@ def sentiment_distribution(texts):
         color_discrete_map={'Positive': 'green', 'Negative': 'red'}
     )
 
-    #create PMI heatmap for top 10 bigrams
-    top_bigrams = m['pmi_bigrams'].head(10)
-    fig_hm = px.bar(
-        top_bigrams,
-        x='bigram',
-        y='pmi',
-        title=f"{selected_line} — Top Bigram PMI Scores",
-        labels={'bigram': 'Bigram', 'pmi': 'PMI Score'}
-    )
-
-    #create wordcloud
     fig_wc = create_wordcloud(line_df['CUSTRECORD_EOS_MEMO'])
 
-    # Sentiment Distribution
     dist_df = sentiment_distribution(line_df['CUSTRECORD_EOS_MEMO'])
     fig_dist = px.histogram(
         dist_df,
@@ -456,7 +485,7 @@ def sentiment_distribution(texts):
         title='Sentiment Score Distribution',
         labels={'score': 'VADER Compound Score'}
     )
-    # Monthly Avg Sentiment Trend
+
     trend_df = (
         line_df.set_index('DATE')['SENT_SCORE']
         .resample('M').mean()
@@ -467,7 +496,7 @@ def sentiment_distribution(texts):
         title='Monthly Avg Sentiment',
         labels={'avg_score': 'Avg VADER Score'}
     )
-    # Top 5 Positive & Negative Memos
+
     top_pos, top_neg = top_extremes(line_df)
     fig_ex = go.Figure()
     fig_ex.add_trace(go.Scatter(
@@ -483,7 +512,7 @@ def sentiment_distribution(texts):
         textposition='bottom center', marker_color='red'
     ))
     fig_ex.update_layout(title='Top 5 Positive & Negative Memos')
-    # Monthly Memo Volume
+
     vol_df = (
         line_df.set_index('DATE')
         .resample('M').size()
@@ -495,34 +524,13 @@ def sentiment_distribution(texts):
         labels={'count': 'Number of Memos'}
     )
 
-    # Monthly Memo Volume (Step 11.2)
-    vol_df = (
-        line_df.set_index('DATE')
-        .resample('M').size()
-        .reset_index(name='count')
-    )
-    fig_vol = px.line(
-        vol_df, x='DATE', y='count', markers=True,
-        title='Monthly Memo Volume', labels={'count': 'Number of Memos'}
-    )
-
-    return [
-        kpis,
-        fig_bg, fig_tb, fig_ld, fig_cl,
-        fig_pie, fig_ts, fig_sent, fig_wd,
-        fig_wc, fig_pca, fig_dist, fig_trend,
-        fig_ex,  # ← make sure fig_ex is returned here
-        fig_vol
-    ]
-
-    #create PCA scatter plot
     fig_pca = generate_pca_scatter(line_df['CUSTRECORD_EOS_MEMO'])
 
-    #analyze downtime mentions
     downtime_pattern = 'down|jam|stuck|break|stopped|failure|error'
     line_df['is_downtime'] = line_df['CUSTRECORD_EOS_MEMO'].str.contains(downtime_pattern, case=False)
     downtime_count = line_df['is_downtime'].sum()
     total_count = len(line_df)
+    other = total_count - downtime_memos
 
     fig_pie = px.pie(
         values=[downtime_memos, other],
@@ -533,12 +541,24 @@ def sentiment_distribution(texts):
     )
     fig_pie.update_traces(textinfo='percent+value', textposition='inside')
 
-    return [kpis, fig_bg, fig_tb, fig_ld,  fig_cl,  fig_pie,
-            fig_ts,  fig_sent,  fig_wd,   fig_wc,   fig_pca,
-            fig_dist,  fig_trend, fig_ex, fig_vol]
+    return [
+        kpis,
+        fig_bg,
+        fig_tb,
+        fig_ld,
+        fig_cl,
+        fig_pie,
+        fig_ts,
+        fig_sent,
+        fig_wd,
+        fig_wc,
+        fig_pca,
+        fig_dist,
+        fig_trend,
+        fig_ex,
+        fig_vol
+    ]
 
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
