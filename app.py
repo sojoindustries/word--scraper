@@ -12,9 +12,11 @@ from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
 import os
 import nltk
+from scipy.stats import gaussian_kde
 
 nltk_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nltk_data')
 os.makedirs(nltk_data_path, exist_ok=True)
+
 nltk.data.path.append(nltk_data_path)
 
 
@@ -477,14 +479,44 @@ def update_dashboard(selected_line, start_date, end_date):
 
     fig_wc = create_wordcloud(line_df['CUSTRECORD_EOS_MEMO'])
 
-    dist_df = sentiment_distribution(line_df['CUSTRECORD_EOS_MEMO'])
-    fig_dist = px.histogram(
-        dist_df,
-        x='score',
-        nbins=20,
-        title='Sentiment Score Distribution',
-        labels={'score': 'VADER Compound Score'}
-    )
+    # ── NEW DISTRIBUTION BLOCK (Density + KDE) ──────────────────────
+    # extract raw compound scores
+    scores = np.array([
+        sentiment_analyzer.polarity_scores(txt)['compound']
+        for txt in line_df['CUSTRECORD_EOS_MEMO']
+    ])
+
+    # handle empty case
+    if scores.size == 0:
+        fig_dist = go.Figure()
+    else:
+        # KDE smoothing
+        kde = gaussian_kde(scores)
+        x_grid = np.linspace(scores.min(), scores.max(), 200)
+        y_kde = kde(x_grid)
+
+        # build density histogram + KDE
+        fig_dist = go.Figure([
+            go.Histogram(
+                x=scores,
+                nbinsx=20,
+                histnorm='probability density',
+                name='Histogram'
+            ),
+            go.Scatter(
+                x=x_grid,
+                y=y_kde,
+                mode='lines',
+                name='KDE'
+            )
+        ])
+        fig_dist.update_layout(
+            title='Sentiment Score Distribution (Density + KDE)',
+            xaxis_title='VADER Compound Score',
+            yaxis_title='Probability Density',
+            bargap=0.2
+        )
+    # ────────────────────────────────────────────────────────────────
 
     trend_df = (
         line_df.set_index('DATE')['SENT_SCORE']
@@ -497,21 +529,36 @@ def update_dashboard(selected_line, start_date, end_date):
         labels={'avg_score': 'Avg VADER Score'}
     )
 
+    # ── NEW TOP EXTREMES BLOCK (Dates-only) ─────────────────────────
     top_pos, top_neg = top_extremes(line_df)
+
+    # add short date labels
+    top_pos['DATE_STR'] = top_pos['DATE'].dt.strftime('%Y-%m-%d')
+    top_neg['DATE_STR'] = top_neg['DATE'].dt.strftime('%Y-%m-%d')
+
     fig_ex = go.Figure()
     fig_ex.add_trace(go.Scatter(
         x=top_pos['DATE'], y=top_pos['score'],
-        mode='markers+text', name='Top Positive',
-        text=top_pos['CUSTRECORD_EOS_MEMO'],
-        textposition='top center', marker_color='green'
+        mode='markers+text',
+        name='Top Positive',
+        text=top_pos['DATE_STR'],
+        textposition='top center',
+        marker=dict(color='green', size=10)
     ))
     fig_ex.add_trace(go.Scatter(
         x=top_neg['DATE'], y=top_neg['score'],
-        mode='markers+text', name='Top Negative',
-        text=top_neg['CUSTRECORD_EOS_MEMO'],
-        textposition='bottom center', marker_color='red'
+        mode='markers+text',
+        name='Top Negative',
+        text=top_neg['DATE_STR'],
+        textposition='bottom center',
+        marker=dict(color='red', size=10)
     ))
-    fig_ex.update_layout(title='Top 5 Positive & Negative Memos')
+    fig_ex.update_layout(
+        title='Top 5 Positive & Negative Memo Dates',
+        xaxis_title='Date',
+        yaxis_title='VADER Compound Score'
+    )
+    # ────────────────────────────────────────────────────────────────
 
     vol_df = (
         line_df.set_index('DATE')
