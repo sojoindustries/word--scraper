@@ -14,54 +14,38 @@ from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
 import nltk
 from scipy.stats import gaussian_kde
-
+from nltk.metrics import BigramAssocMeasures
+from wordcloud import WordCloud
+import base64
+from io import BytesIO
+import re
+from datetime import datetime, timedelta
+from typing import Iterable
+from scipy import stats
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 import json
 import os
-
-
-with open(os.path.join(os.path.dirname(__file__), "secrets.json")) as f:
-    _secrets = json.load(f)
-
-
-CONSUMER_KEY    = _secrets["ConsumerKey"]
-CONSUMER_SECRET = _secrets["ConsumerSecret"]
-TOKEN           = _secrets["ProdTokenID"]
-TOKEN_SECRET    = _secrets["ProdTokenSecret"]
+from utils import get_queries, get_secrets, query_netsuite
 
 
 def fetch_data():
 
-    url = (
-        "https://7501774.suitetalk.api.netsuite.com"
-        "/services/rest/query/v1/suiteql?limit=1000&offset=0"
-    )
-    query = {"q": "SELECT * FROM customrecord_end_of_shift ORDER BY created DESC"}
-
-    auth = OAuth1(
-        CONSUMER_KEY,
-        client_secret=CONSUMER_SECRET,
-        resource_owner_key=TOKEN,
-        resource_owner_secret=TOKEN_SECRET,
-        signature_method='HMAC-SHA256'
-    )
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept':       'application/json',
-        'Prefer':       'transient'
-    }
-
-    resp = requests.post(url, headers=headers, json=query, auth=auth)
-    if resp.status_code != 200:
-        raise Exception(f"SuiteQL API Error {resp.status_code}: {resp.text}")
-
-    items = resp.json().get('items', [])
-    return pd.DataFrame.from_records(items)
+    secrets = get_secrets()
+    queries = get_queries()
+    print("Using OAuth1 for NetSuite API")
+    print(f"secrets: {secrets}")
+    print(f"queries: {queries}")
+    jsonResult = query_netsuite(queries['get_eos_notes'], 1, 0)
+    print(f"jsonResult: {jsonResult}")
+    return jsonResult
 
 
 
 df = fetch_data()
+print(f"Fetched {len(df)} records from NetSuite")
+
 df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
-df['DATE']   = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
+df['DATE']   = pd.to_datetime(df['custrecord_eos_date'])
 df['MONTH']  = df['DATE'].dt.strftime('%Y-%m')
 df['YEAR']   = df['DATE'].dt.year
 df['WEEKDAY']= df['DATE'].dt.day_name()
@@ -166,15 +150,7 @@ else:
 
     print("Using simple fallback tokenizer")
 
-from nltk.metrics import BigramAssocMeasures
-from wordcloud import WordCloud
-import base64
-from io import BytesIO
-import re
-from datetime import datetime, timedelta
-from typing import Iterable
-from scipy import stats
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+
 
 DOMAIN_STOP = {
     'line', 'shift', 'run', 'case', 'production', 'machine', 'ran',

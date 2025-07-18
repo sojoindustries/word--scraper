@@ -1,0 +1,4 @@
+{
+  "get_eos_notes":
+ "SELECT * FROM customrecord_end_of_shift ORDER BY created DESC"
+}
