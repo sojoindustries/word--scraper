@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import dash
+import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, callback_context
 from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
@@ -17,11 +18,11 @@ from scipy.stats import gaussian_kde
 import json
 import os
 
-# load your secrets.json
+
 with open(os.path.join(os.path.dirname(__file__), "secrets.json")) as f:
     _secrets = json.load(f)
 
-# map into your existing variables
+
 CONSUMER_KEY    = _secrets["ConsumerKey"]
 CONSUMER_SECRET = _secrets["ConsumerSecret"]
 TOKEN           = _secrets["ProdTokenID"]
@@ -371,51 +372,184 @@ for product_line in product_lines:
 
 app = dash.Dash(
     __name__,
+    external_stylesheets=[dbc.themes.FLATLY],
     suppress_callback_exceptions=True
 )
 
+
 app.enable_dev_tools()
 
-app.layout = html.Div([
-    html.Div(
-        id='kpi-row',
-        style={
-            'display': 'flex',
-            'justifyContent': 'space-around',
-            'padding': '10px',
-            'backgroundColor': '#f9f9f9'
-        }
-    ),
+def serve_layout():
+    df = fetch_data()
 
-    html.Div([
-        html.H2('End of Shift Reporting Dashboard'),
-        html.Label('Select Product Line:'),
-        dcc.Dropdown(id='line-filter', options=product_lines, value=product_lines[0]),
-        html.Hr(),
-        html.Label('Date Range:'),
-        dcc.DatePickerRange(
-            id='date-range',
-            min_date_allowed=df['DATE'].min(),
-            max_date_allowed=df['DATE'].max(),
-            start_date=df['DATE'].min(),
-            end_date=df['DATE'].max()
-        )
-    ], style={'width': '20%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '20px'}),
+    navbar = dbc.NavbarSimple(
+        brand="End-of-Shift Dashboard",
+        color="dark",
+        dark=True,
+        fluid=True,
+    )
 
-    html.Div([
-        html.H3('Text Analysis Results'),
-        *[dcc.Loading(
-    dcc.Graph(id=graph_id),
-    type='circle'
-        ) for graph_id in [
-            'bigram_summary', 'tfidf_bigrams', 'lda_topics', 'cluster_summary',
-            'downtime_jams_chart', 'timeseries_chart', 'sentiment_chart', 'weekday_chart',
-            'wordcloud_chart', 'pca_scatter', 'downtime-pie-chart', 'sentiment-dist-chart',
-            'sentiment-trend-chart', 'extremes-chart', 'monthly-volume-chart'
-        ]]
+    controls = dbc.Row([
+        dbc.Col(
+            dcc.Dropdown(
+                id="line-filter",  # Changed from "line-dropdown"
+                options=[{"label": l, "value": l} for l in product_lines],  # Changed to use product_lines
+                placeholder="Select Product Line",
+                value=product_lines[0] if product_lines else None,  # Set default value
+            ),
+            md=4,
+        ),
+        dbc.Col(
+            dcc.DatePickerRange(
+                id="date-range",  # Changed from "date-picker"
+                start_date=df["DATE"].min(),  # Changed from "date"
+                end_date=df["DATE"].max(),  # Changed from "date"
+                display_format="YYYY-MM-DD",
+            ),
+            md=8,
+        ),
+    ], className="my-4")
 
-    ], style={'width': '75%', 'display': 'inline-block', 'padding': '20px'})
-])
+    # KPI row
+    kpi_row = dbc.Row(id="kpi-row", className="mb-4")
+
+    # Charts
+    charts = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Bigram Summary"),
+                dbc.CardBody(dcc.Graph(id="bigram_summary")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("TF-IDF Bigrams"),
+                dbc.CardBody(dcc.Graph(id="tfidf_bigrams")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts2 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("LDA Topics"),
+                dbc.CardBody(dcc.Graph(id="lda_topics")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Cluster Summary"),
+                dbc.CardBody(dcc.Graph(id="cluster_summary")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts3 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Downtime Analysis"),
+                dbc.CardBody(dcc.Graph(id="downtime-pie-chart")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Time Series Trend"),
+                dbc.CardBody(dcc.Graph(id="timeseries_chart")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts4 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Sentiment Analysis"),
+                dbc.CardBody(dcc.Graph(id="sentiment_chart")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Weekday Analysis"),
+                dbc.CardBody(dcc.Graph(id="weekday_chart")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts5 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Word Cloud"),
+                dbc.CardBody(dcc.Graph(id="wordcloud_chart")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("PCA Document Similarity"),
+                dbc.CardBody(dcc.Graph(id="pca_scatter")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts6 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Sentiment Distribution"),
+                dbc.CardBody(dcc.Graph(id="sentiment-dist-chart")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Sentiment Trend"),
+                dbc.CardBody(dcc.Graph(id="sentiment-trend-chart")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    charts7 = dbc.Row([
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Extreme Sentiment Dates"),
+                dbc.CardBody(dcc.Graph(id="extremes-chart")),
+            ]),
+            md=6,
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Monthly Volume"),
+                dbc.CardBody(dcc.Graph(id="monthly-volume-chart")),
+            ]),
+            md=6,
+        ),
+    ], className="mb-4")
+
+    return dbc.Container([
+        navbar,
+        controls,
+        kpi_row,
+        charts,
+        charts2,
+        charts3,
+        charts4,
+        charts5,
+        charts6,
+        charts7
+    ], fluid=True)
+
+
+app.layout = serve_layout
+
+
 
 
 def sentiment_distribution(texts):
@@ -443,6 +577,7 @@ def sentiment_distribution(texts):
     Input('date-range', 'start_date'),
     Input('date-range', 'end_date')
 )
+
 def update_dashboard(selected_line, start_date, end_date):
     m = line_metrics[selected_line]
 
