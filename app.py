@@ -1,5 +1,6 @@
 import matplotlib
-
+import requests
+from requests_oauthlib import OAuth1
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,9 +11,59 @@ import dash
 from dash import dcc, html, Input, Output, callback_context
 from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.cluster import KMeans
-import os
 import nltk
 from scipy.stats import gaussian_kde
+
+import json
+import os
+
+# load your secrets.json
+with open(os.path.join(os.path.dirname(__file__), "secrets.json")) as f:
+    _secrets = json.load(f)
+
+# map into your existing variables
+CONSUMER_KEY    = _secrets["ConsumerKey"]
+CONSUMER_SECRET = _secrets["ConsumerSecret"]
+TOKEN           = _secrets["ProdTokenID"]
+TOKEN_SECRET    = _secrets["ProdTokenSecret"]
+
+
+def fetch_data():
+
+    url = (
+        "https://7501774.suitetalk.api.netsuite.com"
+        "/services/rest/query/v1/suiteql?limit=1000&offset=0"
+    )
+    query = {"q": "SELECT * FROM customrecord_end_of_shift ORDER BY created DESC"}
+
+    auth = OAuth1(
+        CONSUMER_KEY,
+        client_secret=CONSUMER_SECRET,
+        resource_owner_key=TOKEN,
+        resource_owner_secret=TOKEN_SECRET,
+        signature_method='HMAC-SHA256'
+    )
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept':       'application/json',
+        'Prefer':       'transient'
+    }
+
+    resp = requests.post(url, headers=headers, json=query, auth=auth)
+    if resp.status_code != 200:
+        raise Exception(f"SuiteQL API Error {resp.status_code}: {resp.text}")
+
+    items = resp.json().get('items', [])
+    return pd.DataFrame.from_records(items)
+
+
+
+df = fetch_data()
+df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
+df['DATE']   = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
+df['MONTH']  = df['DATE'].dt.strftime('%Y-%m')
+df['YEAR']   = df['DATE'].dt.year
+df['WEEKDAY']= df['DATE'].dt.day_name()
 
 nltk_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nltk_data')
 os.makedirs(nltk_data_path, exist_ok=True)
@@ -130,15 +181,13 @@ DOMAIN_STOP = {
 }
 STOP_WORDS = nltk_stopwords | DOMAIN_STOP
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-file_path = "/Users/cole/PycharmProjects/EOSDashboard/Data/CB_EOS_Data_Scraper.csv"
-df = pd.read_csv(file_path)
-
+df = fetch_data()
 df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
-df['DATE'] = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
-df['MONTH'] = df['DATE'].dt.strftime('%Y-%m')
-df['YEAR'] = df['DATE'].dt.year
-df['WEEKDAY'] = df['DATE'].dt.day_name()
+df['DATE']   = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
+df['MONTH']  = df['DATE'].dt.strftime('%Y-%m')
+df['YEAR']   = df['DATE'].dt.year
+df['WEEKDAY']= df['DATE'].dt.day_name()
+
 
 df['SENT_SCORE'] = df['CUSTRECORD_EOS_MEMO'].apply(
     lambda x: sentiment_analyzer.polarity_scores(str(x))['compound'] if isinstance(x, str) else 0
