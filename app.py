@@ -381,8 +381,6 @@ app.enable_dev_tools()
 
 
 def serve_layout():
-    # Instead of fetching new data, use the global data that already has the DATE column
-    # df = fetch_data()  # Remove this line
 
     navbar = dbc.NavbarSimple(
         brand="End-of-Shift Dashboard",
@@ -412,8 +410,7 @@ def serve_layout():
         ),
     ], className="my-4")
 
-    # Rest of your function...
-    # KPI row
+
     kpi_row = dbc.Row(id="kpi-row", className="mb-4")
 
     # Charts
@@ -666,23 +663,21 @@ def update_dashboard(selected_line, start_date, end_date):
 
     fig_wc = create_wordcloud(line_df['custrecord_eos_memo'])
 
-    # ── NEW DISTRIBUTION BLOCK (Density + KDE) ──────────────────────
-    # extract raw compound scores
     scores = np.array([
         sentiment_analyzer.polarity_scores(txt)['compound']
         for txt in line_df['custrecord_eos_memo']
     ])
 
-    # handle empty case
+
     if scores.size == 0:
         fig_dist = go.Figure()
     else:
-        # KDE smoothing
+
         kde = gaussian_kde(scores)
         x_grid = np.linspace(scores.min(), scores.max(), 200)
         y_kde = kde(x_grid)
 
-        # build density histogram + KDE
+
         fig_dist = go.Figure([
             go.Histogram(
                 x=scores,
@@ -716,10 +711,10 @@ def update_dashboard(selected_line, start_date, end_date):
         labels={'avg_score': 'Avg VADER Score'}
     )
 
-    # ── NEW TOP EXTREMES BLOCK (Dates-only) ─────────────────────────
+
     top_pos, top_neg = top_extremes(line_df)
 
-    # add short date labels
+
     top_pos['DATE_STR'] = top_pos['DATE'].dt.strftime('%Y-%m-%d')
     top_neg['DATE_STR'] = top_neg['DATE'].dt.strftime('%Y-%m-%d')
 
@@ -745,7 +740,7 @@ def update_dashboard(selected_line, start_date, end_date):
         xaxis_title='Date',
         yaxis_title='VADER Compound Score'
     )
-    # ────────────────────────────────────────────────────────────────
+
 
     vol_df = (
         line_df.set_index('DATE')
