@@ -29,26 +29,57 @@ from utils import get_queries, get_secrets, query_netsuite
 
 
 def fetch_data():
-
     secrets = get_secrets()
     queries = get_queries()
     print("Using OAuth1 for NetSuite API")
     print(f"secrets: {secrets}")
     print(f"queries: {queries}")
-    jsonResult = query_netsuite(queries['get_eos_notes'], 1, 0)
-    print(f"jsonResult: {jsonResult}")
-    return jsonResult
+
+    all_items = []
+    offset = 0
+    limit = 100
+    max_records = 1000
+
+
+    while True:
+        json_result = query_netsuite(queries['get_eos_notes'], limit, offset)
+
+        items = json_result.get('items', [])
+        all_items.extend(items)
+
+
+        print(f"Fetched batch of {len(items)} records (total: {len(all_items)})")
+
+
+        if not json_result.get('hasMore', False) or len(all_items) >= max_records:
+            break
+
+
+        offset += limit
+
+    df = pd.DataFrame(all_items)
+    print(f"Fetched {len(df)} total records from NetSuite")
+
+    return df
 
 
 
 df = fetch_data()
 print(f"Fetched {len(df)} records from NetSuite")
 
-df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
-df['DATE']   = pd.to_datetime(df['custrecord_eos_date'])
-df['MONTH']  = df['DATE'].dt.strftime('%Y-%m')
-df['YEAR']   = df['DATE'].dt.year
-df['WEEKDAY']= df['DATE'].dt.day_name()
+
+required_fields = ['custrecord_eos_date', 'custrecord_eos_memo', 'custrecord_eos_prod_line']
+for field in required_fields:
+    if field not in df.columns:
+        print(f"WARNING: Required field '{field}' is missing from the API response")
+    else:
+        print(f"Field '{field}' is present. Sample value:", df[field].iloc[0] if not df.empty else "No data")
+
+df['custrecord_eos_memo'] = df['custrecord_eos_memo'].fillna('')
+df['DATE'] = pd.to_datetime(df['custrecord_eos_date'])
+df['MONTH'] = df['DATE'].dt.strftime('%Y-%m')
+df['YEAR'] = df['DATE'].dt.year
+df['WEEKDAY'] = df['DATE'].dt.day_name()
 
 nltk_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nltk_data')
 os.makedirs(nltk_data_path, exist_ok=True)
@@ -158,19 +189,12 @@ DOMAIN_STOP = {
 }
 STOP_WORDS = nltk_stopwords | DOMAIN_STOP
 
-df = fetch_data()
-df['CUSTRECORD_EOS_MEMO'] = df['CUSTRECORD_EOS_MEMO'].fillna('')
-df['DATE']   = pd.to_datetime(df['CUSTRECORD_EOS_DATE'])
-df['MONTH']  = df['DATE'].dt.strftime('%Y-%m')
-df['YEAR']   = df['DATE'].dt.year
-df['WEEKDAY']= df['DATE'].dt.day_name()
 
-
-df['SENT_SCORE'] = df['CUSTRECORD_EOS_MEMO'].apply(
+df['SENT_SCORE'] = df['custrecord_eos_memo'].apply(
     lambda x: sentiment_analyzer.polarity_scores(str(x))['compound'] if isinstance(x, str) else 0
 )
 
-product_lines = sorted(df['BINNUMBER'].dropna().unique())
+product_lines = sorted(df['custrecord_eos_prod_line'].dropna().unique())
 
 
 def extract_ngrams(texts, ngram_range=(1, 1), top_n=20):
@@ -337,7 +361,7 @@ NEGATIVE_TERMS = ['issue', 'problem', 'error', 'fail', 'down', 'jam', 'stuck', '
 
 line_metrics = {}
 for product_line in product_lines:
-    texts = df[df['BINNUMBER'] == product_line]['CUSTRECORD_EOS_MEMO']
+    texts = df[df['custrecord_eos_prod_line'] == product_line]['custrecord_eos_memo']
     line_metrics[product_line] = {
         'bigrams': extract_ngrams(texts, (2, 2)),
         'tfidf_bigrams': extract_tfidf_terms(texts, (2, 2)),
@@ -355,8 +379,10 @@ app = dash.Dash(
 
 app.enable_dev_tools()
 
+
 def serve_layout():
-    df = fetch_data()
+    # Instead of fetching new data, use the global data that already has the DATE column
+    # df = fetch_data()  # Remove this line
 
     navbar = dbc.NavbarSimple(
         brand="End-of-Shift Dashboard",
@@ -368,24 +394,25 @@ def serve_layout():
     controls = dbc.Row([
         dbc.Col(
             dcc.Dropdown(
-                id="line-filter",  # Changed from "line-dropdown"
-                options=[{"label": l, "value": l} for l in product_lines],  # Changed to use product_lines
+                id="line-filter",
+                options=[{"label": l, "value": l} for l in product_lines],
                 placeholder="Select Product Line",
-                value=product_lines[0] if product_lines else None,  # Set default value
+                value=product_lines[0] if product_lines else None,
             ),
             md=4,
         ),
         dbc.Col(
             dcc.DatePickerRange(
-                id="date-range",  # Changed from "date-picker"
-                start_date=df["DATE"].min(),  # Changed from "date"
-                end_date=df["DATE"].max(),  # Changed from "date"
+                id="date-range",
+                start_date=df["DATE"].min(),  # This line was causing the error
+                end_date=df["DATE"].max(),
                 display_format="YYYY-MM-DD",
             ),
             md=8,
         ),
     ], className="my-4")
 
+    # Rest of your function...
     # KPI row
     kpi_row = dbc.Row(id="kpi-row", className="mb-4")
 
@@ -557,7 +584,7 @@ def sentiment_distribution(texts):
 def update_dashboard(selected_line, start_date, end_date):
     m = line_metrics[selected_line]
 
-    line_df = df[df['BINNUMBER'] == selected_line]
+    line_df = df[df['custrecord_eos_prod_line'] == selected_line]
     if start_date and end_date:
         line_df = line_df[(line_df['DATE'] >= start_date) & (line_df['DATE'] <= end_date)]
 
@@ -569,7 +596,7 @@ def update_dashboard(selected_line, start_date, end_date):
 
     total_memos = len(line_df)
     avg_sent = line_df['SENT_SCORE'].mean()
-    downtime_memos = line_df['CUSTRECORD_EOS_MEMO'] \
+    downtime_memos = line_df['custrecord_eos_memo'] \
         .str.contains('down|jam|stuck|break|stopped|failure|error', case=False).sum()
     kpis = [
         html.Div([html.H4('Total Memos'), html.P(total_memos)]),
@@ -579,10 +606,10 @@ def update_dashboard(selected_line, start_date, end_date):
 
     def top_extremes(df_line):
         df_line = df_line.copy()
-        df_line['score'] = df_line['CUSTRECORD_EOS_MEMO'] \
+        df_line['score'] = df_line['custrecord_eos_memo'] \
             .apply(lambda t: sentiment_analyzer.polarity_scores(t)['compound'])
-        top_pos = df_line.nlargest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
-        top_neg = df_line.nsmallest(5, 'score')[['DATE', 'CUSTRECORD_EOS_MEMO', 'score']]
+        top_pos = df_line.nlargest(5, 'score')[['DATE', 'custrecord_eos_memo', 'score']]
+        top_neg = df_line.nsmallest(5, 'score')[['DATE', 'custrecord_eos_memo', 'score']]
         return top_pos, top_neg
 
     fig_bg = create_table(m['bigrams'], f"{selected_line} — Top Bigrams")
@@ -637,13 +664,13 @@ def update_dashboard(selected_line, start_date, end_date):
         color_discrete_map={'Positive': 'green', 'Negative': 'red'}
     )
 
-    fig_wc = create_wordcloud(line_df['CUSTRECORD_EOS_MEMO'])
+    fig_wc = create_wordcloud(line_df['custrecord_eos_memo'])
 
     # ── NEW DISTRIBUTION BLOCK (Density + KDE) ──────────────────────
     # extract raw compound scores
     scores = np.array([
         sentiment_analyzer.polarity_scores(txt)['compound']
-        for txt in line_df['CUSTRECORD_EOS_MEMO']
+        for txt in line_df['custrecord_eos_memo']
     ])
 
     # handle empty case
@@ -731,10 +758,10 @@ def update_dashboard(selected_line, start_date, end_date):
         labels={'count': 'Number of Memos'}
     )
 
-    fig_pca = generate_pca_scatter(line_df['CUSTRECORD_EOS_MEMO'])
+    fig_pca = generate_pca_scatter(line_df['custrecord_eos_memo'])
 
     downtime_pattern = 'down|jam|stuck|break|stopped|failure|error'
-    line_df['is_downtime'] = line_df['CUSTRECORD_EOS_MEMO'].str.contains(downtime_pattern, case=False)
+    line_df['is_downtime'] = line_df['custrecord_eos_memo'].str.contains(downtime_pattern, case=False)
     downtime_count = line_df['is_downtime'].sum()
     total_count = len(line_df)
     other = total_count - downtime_memos
