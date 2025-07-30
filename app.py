@@ -37,8 +37,8 @@ def fetch_data():
 
     all_items = []
     offset = 0
-    limit = 100
-    max_records = 1000
+    limit = 1000
+    max_records = 100000
 
 
     while True:
@@ -226,6 +226,9 @@ def extract_tfidf_terms(texts, ngram_range=(1, 1), top_n=20):
         X = vectorizer.fit_transform(texts)
         scores = np.asarray(X.sum(axis=0)).ravel()
         features = vectorizer.get_feature_names_out()
+
+        scores = np.round(scores, 2)
+
         return pd.DataFrame({'phrase': features, 'tfidf': scores}) \
             .sort_values('tfidf', ascending=False) \
             .head(top_n)
@@ -303,7 +306,7 @@ def create_wordcloud(texts):
     return fig_wc
 
 
-def generate_pca_scatter(texts):
+def generate_pca_scatter(texts, dates=None):
     if len(texts) < 3:
         return px.scatter(title="Not enough data for PCA visualization")
 
@@ -316,20 +319,45 @@ def generate_pca_scatter(texts):
 
         var_explained = pca.explained_variance_ratio_
 
-        fig = px.scatter(
-            x=components[:, 0],
-            y=components[:, 1],
-            labels={
-                'x': f'PC1 ({var_explained[0]:.2%} variance)',
-                'y': f'PC2 ({var_explained[1]:.2%} variance)'
-            },
-            title="PCA of Document Similarity"
-        )
+        # Create a dataframe with PCA components
+        pca_df = pd.DataFrame({
+            'pca_x': components[:, 0],
+            'pca_y': components[:, 1]
+        })
+
+        # Add date information if available
+        if dates is not None and len(dates) == len(pca_df):
+            pca_df['day'] = pd.Series(dates).dt.strftime('%Y-%m-%d')
+
+            fig = px.scatter(
+                pca_df,
+                x='pca_x',
+                y='pca_y',
+                text='day',  # Add day labels to points
+                labels={
+                    'pca_x': f'PC1 ({var_explained[0]:.2%} variance)',
+                    'pca_y': f'PC2 ({var_explained[1]:.2%} variance)'
+                },
+                title="PCA of Document Similarity"
+            )
+            # Make the text visible by default
+            fig.update_traces(textposition='top center')
+        else:
+            fig = px.scatter(
+                pca_df,
+                x='pca_x',
+                y='pca_y',
+                labels={
+                    'pca_x': f'PC1 ({var_explained[0]:.2%} variance)',
+                    'pca_y': f'PC2 ({var_explained[1]:.2%} variance)'
+                },
+                title="PCA of Document Similarity"
+            )
+
         return fig
     except Exception as e:
         print(f"PCA computation failed: {e}")
         return px.scatter(title="PCA computation failed")
-
 
 def extract_sentiment_keywords(texts, positive_terms, negative_terms):
     pos_counts = {}
@@ -381,7 +409,6 @@ app.enable_dev_tools()
 
 
 def serve_layout():
-
     navbar = dbc.NavbarSimple(
         brand="End-of-Shift Dashboard",
         color="dark",
@@ -402,14 +429,13 @@ def serve_layout():
         dbc.Col(
             dcc.DatePickerRange(
                 id="date-range",
-                start_date=df["DATE"].min(),  # This line was causing the error
+                start_date=df["DATE"].min(),
                 end_date=df["DATE"].max(),
                 display_format="YYYY-MM-DD",
             ),
             md=8,
         ),
     ], className="my-4")
-
 
     kpi_row = dbc.Row(id="kpi-row", className="mb-4")
 
@@ -441,8 +467,8 @@ def serve_layout():
         ),
         dbc.Col(
             dbc.Card([
-                dbc.CardHeader("Cluster Summary"),
-                dbc.CardBody(dcc.Graph(id="cluster_summary")),
+                dbc.CardHeader("Time Series Trend"),
+                dbc.CardBody(dcc.Graph(id="timeseries_chart")),
             ]),
             md=6,
         ),
@@ -454,14 +480,7 @@ def serve_layout():
                 dbc.CardHeader("Downtime Analysis"),
                 dbc.CardBody(dcc.Graph(id="downtime-pie-chart")),
             ]),
-            md=6,
-        ),
-        dbc.Col(
-            dbc.Card([
-                dbc.CardHeader("Time Series Trend"),
-                dbc.CardBody(dcc.Graph(id="timeseries_chart")),
-            ]),
-            md=6,
+            md=12,  # Changed to full width
         ),
     ], className="mb-4")
 
@@ -471,31 +490,17 @@ def serve_layout():
                 dbc.CardHeader("Sentiment Analysis"),
                 dbc.CardBody(dcc.Graph(id="sentiment_chart")),
             ]),
-            md=6,
-        ),
-        dbc.Col(
-            dbc.Card([
-                dbc.CardHeader("Weekday Analysis"),
-                dbc.CardBody(dcc.Graph(id="weekday_chart")),
-            ]),
-            md=6,
+            md=12,
         ),
     ], className="mb-4")
 
     charts5 = dbc.Row([
         dbc.Col(
             dbc.Card([
-                dbc.CardHeader("Word Cloud"),
-                dbc.CardBody(dcc.Graph(id="wordcloud_chart")),
-            ]),
-            md=6,
-        ),
-        dbc.Col(
-            dbc.Card([
                 dbc.CardHeader("PCA Document Similarity"),
                 dbc.CardBody(dcc.Graph(id="pca_scatter")),
             ]),
-            md=6,
+            md=12,
         ),
     ], className="mb-4")
 
@@ -522,16 +527,12 @@ def serve_layout():
                 dbc.CardHeader("Extreme Sentiment Dates"),
                 dbc.CardBody(dcc.Graph(id="extremes-chart")),
             ]),
-            md=6,
-        ),
-        dbc.Col(
-            dbc.Card([
-                dbc.CardHeader("Monthly Volume"),
-                dbc.CardBody(dcc.Graph(id="monthly-volume-chart")),
-            ]),
-            md=6,
+            md=12,
         ),
     ], className="mb-4")
+
+    # Add hidden placeholder for cluster_summary to keep callback structure intact
+    hidden_components = html.Div(dcc.Graph(id="cluster_summary", style={"display": "none"}))
 
     return dbc.Container([
         navbar,
@@ -543,7 +544,8 @@ def serve_layout():
         charts4,
         charts5,
         charts6,
-        charts7
+        charts7,
+        hidden_components
     ], fluid=True)
 
 
@@ -566,18 +568,14 @@ def sentiment_distribution(texts):
     Output('downtime-pie-chart', 'figure'),
     Output('timeseries_chart', 'figure'),
     Output('sentiment_chart', 'figure'),
-    Output('weekday_chart', 'figure'),
-    Output('wordcloud_chart', 'figure'),
     Output('pca_scatter', 'figure'),
     Output('sentiment-dist-chart', 'figure'),
     Output('sentiment-trend-chart', 'figure'),
     Output('extremes-chart', 'figure'),
-    Output('monthly-volume-chart', 'figure'),
     Input('line-filter', 'value'),
     Input('date-range', 'start_date'),
     Input('date-range', 'end_date')
 )
-
 def update_dashboard(selected_line, start_date, end_date):
     m = line_metrics[selected_line]
 
@@ -612,7 +610,10 @@ def update_dashboard(selected_line, start_date, end_date):
     fig_bg = create_table(m['bigrams'], f"{selected_line} — Top Bigrams")
     fig_tb = create_table(m['tfidf_bigrams'], f"{selected_line} — Top TF-IDF Bigrams")
     fig_ld = create_table(m['lda_topics'], f"{selected_line} — LDA Topics")
-    fig_cl = create_table(m['clusters'], f"{selected_line} — Cluster Sizes")
+
+    # Create an empty figure instead of the cluster sizes table
+    fig_cl = go.Figure()
+    fig_cl.update_layout(title="Cluster Summary")
 
     time_df = line_df.groupby(pd.Grouper(key='DATE', freq='W')).size().reset_index(name='count')
     fig_ts = px.line(
@@ -621,26 +622,6 @@ def update_dashboard(selected_line, start_date, end_date):
         y='count',
         title=f"{selected_line} — Weekly Comment Trends",
         labels={'DATE': 'Week', 'count': 'Number of Comments'}
-    )
-
-    weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    weekday_df = line_df.groupby(['WEEKDAY', line_df['DATE'].dt.isocalendar().week]).size().reset_index(name='count')
-
-    weekday_stats = weekday_df.groupby('WEEKDAY').agg(
-        mean_count=('count', 'mean'),
-        std_err=('count', lambda x: stats.sem(x, nan_policy='omit') if len(x) > 1 else 0)
-    ).reset_index()
-
-    weekday_stats['WEEKDAY'] = pd.Categorical(weekday_stats['WEEKDAY'], categories=weekday_order)
-    weekday_stats = weekday_stats.sort_values('WEEKDAY')
-
-    fig_wd = px.bar(
-        weekday_stats,
-        x='WEEKDAY',
-        y='mean_count',
-        error_y='std_err',
-        title=f"{selected_line} — Comments by Day of Week (with Statistical Significance)",
-        labels={'WEEKDAY': 'Day', 'mean_count': 'Average Number of Comments'}
     )
 
     pos_df = m['sentiment']['positive'].head(10)
@@ -661,22 +642,17 @@ def update_dashboard(selected_line, start_date, end_date):
         color_discrete_map={'Positive': 'green', 'Negative': 'red'}
     )
 
-    fig_wc = create_wordcloud(line_df['custrecord_eos_memo'])
-
     scores = np.array([
         sentiment_analyzer.polarity_scores(txt)['compound']
         for txt in line_df['custrecord_eos_memo']
     ])
 
-
     if scores.size == 0:
         fig_dist = go.Figure()
     else:
-
         kde = gaussian_kde(scores)
         x_grid = np.linspace(scores.min(), scores.max(), 200)
         y_kde = kde(x_grid)
-
 
         fig_dist = go.Figure([
             go.Histogram(
@@ -698,22 +674,19 @@ def update_dashboard(selected_line, start_date, end_date):
             yaxis_title='Probability Density',
             bargap=0.2
         )
-    # ────────────────────────────────────────────────────────────────
 
     trend_df = (
         line_df.set_index('DATE')['SENT_SCORE']
-        .resample('M').mean()
+        .resample('W').mean()  # Changed from 'M' to 'W' for weekly
         .reset_index(name='avg_score')
     )
     fig_trend = px.line(
         trend_df, x='DATE', y='avg_score', markers=True,
-        title='Monthly Avg Sentiment',
+        title='Weekly Avg Sentiment',  # Updated title
         labels={'avg_score': 'Avg VADER Score'}
     )
 
-
     top_pos, top_neg = top_extremes(line_df)
-
 
     top_pos['DATE_STR'] = top_pos['DATE'].dt.strftime('%Y-%m-%d')
     top_neg['DATE_STR'] = top_neg['DATE'].dt.strftime('%Y-%m-%d')
@@ -741,19 +714,8 @@ def update_dashboard(selected_line, start_date, end_date):
         yaxis_title='VADER Compound Score'
     )
 
+    fig_pca = generate_pca_scatter(line_df['custrecord_eos_memo'], line_df['DATE'])
 
-    vol_df = (
-        line_df.set_index('DATE')
-        .resample('M').size()
-        .reset_index(name='count')
-    )
-    fig_vol = px.line(
-        vol_df, x='DATE', y='count', markers=True,
-        title='Monthly Memo Volume',
-        labels={'count': 'Number of Memos'}
-    )
-
-    fig_pca = generate_pca_scatter(line_df['custrecord_eos_memo'])
 
     downtime_pattern = 'down|jam|stuck|break|stopped|failure|error'
     line_df['is_downtime'] = line_df['custrecord_eos_memo'].str.contains(downtime_pattern, case=False)
@@ -771,23 +733,11 @@ def update_dashboard(selected_line, start_date, end_date):
     fig_pie.update_traces(textinfo='percent+value', textposition='inside')
 
     return [
-        kpis,
-        fig_bg,
-        fig_tb,
-        fig_ld,
-        fig_cl,
-        fig_pie,
-        fig_ts,
-        fig_sent,
-        fig_wd,
-        fig_wc,
-        fig_pca,
-        fig_dist,
-        fig_trend,
-        fig_ex,
-        fig_vol
+        kpis,fig_bg, fig_tb,
+        fig_ld, fig_cl, fig_pie,
+        fig_ts, fig_sent, fig_pca,
+        fig_dist, fig_trend, fig_ex
     ]
-
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -1,4 +1,3 @@
 {
-  "get_eos_notes":
- "SELECT * FROM customrecord_end_of_shift ORDER BY created DESC"
+  "get_eos_notes": "SELECT eos.*, bin.binnumber FROM customrecord_end_of_shift eos LEFT JOIN bin ON bin.id = eos.custrecord_eos_prod_line ORDER BY eos.created DESC"
 }
